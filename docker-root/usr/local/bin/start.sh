@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# From https://github.com/Hagb/docker-easyconnect
+
 # 不支持 nftables 时使用 iptables-legacy
 # 感谢 @BoringCat https://github.com/Hagb/docker-easyconnect/issues/5
 if { [ -z "$IPTABLES_LEGACY" ] && iptables-nft -L 1>/dev/null 2>/dev/null ;}
@@ -47,39 +49,26 @@ iptables -I INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 # 感谢 @stingshen https://github.com/Hagb/docker-easyconnect/issues/6
 ( while true; do sleep 5 ; iptables -D SANGFOR_VIRTUAL -j DROP 2>/dev/null ; done )&
 
-if [ -n "$_EC_CLI" ]; then
-	ln -s /usr/share/sangfor/EasyConnect/resources/{conf_${EC_VER},conf}
-	exec start-sangfor.sh
-fi
+ln -s /usr/share/sangfor/EasyConnect/resources/{conf_${EC_VER},conf}
 
-[ -n "$EXIT" ] && MAX_RETRY=0
+sleep 1
 
-# 登陆信息持久化处理
-## 持久化配置文件夹 感谢 @hexid26 https://github.com/Hagb/docker-easyconnect/issues/21
-[ -d ~/conf ] || cp -a /usr/share/sangfor/EasyConnect/resources/conf_backup ~/conf
-[ -e ~/easy_connect.json ] && mv ~/easy_connect.json ~/conf/easy_connect.json # 向下兼容
-## 默认使用英语：感谢 @forest0 https://github.com/Hagb/docker-easyconnect/issues/2#issuecomment-658205504
-[ -e ~/conf/easy_connect.json ] || echo '{"language": "en_US"}' > ~/conf/easy_connect.json
+while true
+do
+	/usr/share/sangfor/EasyConnect/resources/bin/ECAgent &
+	sleep 1
+	easyconn login -t autologin
+	pidof svpnservice > /dev/null || bash -c "exec easyconn login $CLI_OPTS"
+	while pidof svpnservice > /dev/null ; do
+	       sleep 1
+	done
+	echo svpn stop!
 
-export DISPLAY
+	# 清除的残余进程，它们可能会妨碍下次的启动。
+	killall CSClient svpnservice 2> /dev/null
+	kill %1 %2 2> /dev/null
+	sleep 4
 
-if [ "$TYPE" != "X11" -a "$TYPE" != "x11" ]
-then
-	# container 再次运行时清除 /tmp 中的锁，使 container 能够反复使用。
-	# 感谢 @skychan https://github.com/Hagb/docker-easyconnect/issues/4#issuecomment-660842149
-	rm -rf /tmp
-	mkdir /tmp
-
-	# $PASSWORD 不为空时，更新 vnc 密码
-	[ -e ~/.vnc/passwd ] || (mkdir -p ~/.vnc && (echo password | tigervncpasswd -f > ~/.vnc/passwd)) 
-	[ -n "$PASSWORD" ] && printf %s "$PASSWORD" | tigervncpasswd -f > ~/.vnc/passwd
-
-	tigervncserver :1 -geometry 800x600 -localhost no -passwd ~/.vnc/passwd -xstartup flwm
-	DISPLAY=:1
-
-	# 将 easyconnect 的密码放入粘贴板中，应对密码复杂且无法保存的情况 (eg: 需要短信验证登陆)
-	# 感谢 @yakumioto https://github.com/Hagb/docker-easyconnect/pull/8
-	echo "$ECPASSWORD" | DISPLAY=:1 xclip -selection c
-fi
-
-exec start-sangfor.sh
+	# 只要杀不死，就往死里杀
+	killall -9 CSClient svpnservice 2> /dev/null
+done
